@@ -1,0 +1,36 @@
+# Binary
+nrr
+nrr.exe
+
+# Build output
+/dist/
+/bin/
+
+# Go
+*.test
+*.out
+/vendor/
+
+# Go workspace (if using go work)
+go.work
+go.work.sum
+
+# macOS
+.DS_Store
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Test coverage
+coverage.out
+coverage.html
