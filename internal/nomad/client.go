@@ -1,5 +1,5 @@
 // Package nomad handles Nomad API interaction: discovering jobs, task groups,
-// tasks, and their current declared resource specs.
+// tasks, their current declared resource specs, and running allocation IDs.
 package nomad
 
 import (
@@ -20,6 +20,12 @@ type TaskSpec struct {
 	// Current declared resources (what the job file says).
 	CPUMHz   int // CPU in MHz as declared in the job spec
 	MemoryMB int // Memory in MB as declared in the job spec
+
+	// AllocIDs contains the IDs of currently running allocations for this
+	// task's group. Used by the cAdvisor adapter to filter metrics by
+	// container_label_com_hashicorp_nomad_alloc_id when job/task name labels
+	// are not present.
+	AllocIDs []string
 }
 
 // Client wraps the Nomad API client.
@@ -40,49 +46,35 @@ func NewClient(address string) (*Client, error) {
 }
 
 // DiscoverTasks lists all running tasks across all jobs in the given namespace,
-// optionally filtered to a single job name. It returns the task's current
-// declared CPU (MHz) and memory (MB) specs.
+// optionally filtered to a single job name. It returns each task's current
+// declared CPU (MHz) and memory (MB) specs, plus the running allocation IDs.
 func (c *Client) DiscoverTasks(ctx context.Context, namespace, jobFilter string) ([]TaskSpec, error) {
-	qOpts := &nomadapi.QueryOptions{
-		Namespace: namespace,
-	}
+	qOpts := &nomadapi.QueryOptions{Namespace: namespace}
 	qOpts = qOpts.WithContext(ctx)
 
-	// List all jobs (or a single one if filtered)
-	var jobStubs []*nomadapi.JobListStub
 	if jobFilter != "" {
-		// Fetch just the one job
 		job, _, err := c.api.Jobs().Info(jobFilter, qOpts)
 		if err != nil {
 			return nil, fmt.Errorf("fetching job %q: %w", jobFilter, err)
 		}
-		stubs, err := c.tasksFromJob(job, namespace)
-		if err != nil {
-			return nil, err
-		}
-		return stubs, nil
+		return c.tasksFromJob(ctx, job, namespace, qOpts)
 	}
 
-	// List all jobs in the namespace
-	var err error
-	jobStubs, _, err = c.api.Jobs().List(qOpts)
+	jobStubs, _, err := c.api.Jobs().List(qOpts)
 	if err != nil {
 		return nil, fmt.Errorf("listing jobs: %w", err)
 	}
 
 	var tasks []TaskSpec
 	for _, stub := range jobStubs {
-		// Only consider running jobs
 		if stub.Status != "running" {
 			continue
 		}
-
 		job, _, err := c.api.Jobs().Info(stub.ID, qOpts)
 		if err != nil {
 			return nil, fmt.Errorf("fetching job %q: %w", stub.ID, err)
 		}
-
-		jobTasks, err := c.tasksFromJob(job, namespace)
+		jobTasks, err := c.tasksFromJob(ctx, job, namespace, qOpts)
 		if err != nil {
 			return nil, err
 		}
@@ -92,8 +84,9 @@ func (c *Client) DiscoverTasks(ctx context.Context, namespace, jobFilter string)
 	return tasks, nil
 }
 
-// tasksFromJob extracts TaskSpec entries from a fully-fetched Nomad job.
-func (c *Client) tasksFromJob(job *nomadapi.Job, namespace string) ([]TaskSpec, error) {
+// tasksFromJob extracts TaskSpec entries from a fully-fetched Nomad job,
+// including the running allocation IDs for each task group.
+func (c *Client) tasksFromJob(ctx context.Context, job *nomadapi.Job, namespace string, qOpts *nomadapi.QueryOptions) ([]TaskSpec, error) {
 	if job == nil || job.TaskGroups == nil {
 		return nil, nil
 	}
@@ -103,11 +96,23 @@ func (c *Client) tasksFromJob(job *nomadapi.Job, namespace string) ([]TaskSpec, 
 		ns = *job.Namespace
 	}
 
+	// Fetch running allocations for this job to populate AllocIDs.
+	// alloc_id is per task-group, not per task, so we build a map:
+	// group name → []alloc_id
+	groupAllocs, err := c.runningAllocsByGroup(ctx, *job.ID, qOpts)
+	if err != nil {
+		// Non-fatal — we can still recommend without alloc IDs,
+		// cAdvisor adapter will just return no data for this job.
+		groupAllocs = map[string][]string{}
+	}
+
 	var tasks []TaskSpec
 	for _, group := range job.TaskGroups {
 		if group == nil {
 			continue
 		}
+		allocIDs := groupAllocs[*group.Name]
+
 		for _, task := range group.Tasks {
 			if task == nil {
 				continue
@@ -118,6 +123,7 @@ func (c *Client) tasksFromJob(job *nomadapi.Job, namespace string) ([]TaskSpec, 
 				Job:       *job.ID,
 				Group:     *group.Name,
 				Task:      task.Name,
+				AllocIDs:  allocIDs,
 			}
 
 			if task.Resources != nil {
@@ -134,4 +140,21 @@ func (c *Client) tasksFromJob(job *nomadapi.Job, namespace string) ([]TaskSpec, 
 	}
 
 	return tasks, nil
+}
+
+// runningAllocsByGroup returns a map of group name → running alloc IDs.
+func (c *Client) runningAllocsByGroup(ctx context.Context, jobID string, qOpts *nomadapi.QueryOptions) (map[string][]string, error) {
+	allocs, _, err := c.api.Jobs().Allocations(jobID, false, qOpts)
+	if err != nil {
+		return nil, fmt.Errorf("listing allocations for job %q: %w", jobID, err)
+	}
+
+	result := map[string][]string{}
+	for _, alloc := range allocs {
+		if alloc.ClientStatus != "running" {
+			continue
+		}
+		result[alloc.TaskGroup] = append(result[alloc.TaskGroup], alloc.ID)
+	}
+	return result, nil
 }

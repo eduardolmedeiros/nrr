@@ -22,6 +22,8 @@ import (
 	"math"
 	"math/rand"
 	"time"
+
+	"github.com/nrr-project/nrr/internal/nomad"
 )
 
 const (
@@ -97,16 +99,17 @@ func New() *Adapter {
 // it uses a reasonable stand-in base value (500 MHz) scaled by the scenario.
 // The cmd layer passes the full TaskSpec to the real adapters; for the mock,
 // the samples are proportional to a typical Nomad task size.
-func (a *Adapter) QueryCPU(ctx context.Context, job, group, task, namespace string, window time.Duration) ([]float64, error) {
-	sc := pickScenario(job + group + task)
-	baseMHz := float64(baseValue(job+group+task, 100, 2000)) // 100–2000 MHz base
+func (a *Adapter) QueryCPU(ctx context.Context, task nomad.TaskSpec, window time.Duration) ([]float64, error) {
+	key := task.Job + task.Group + task.Task
+	sc := pickScenario(key)
+	baseMHz := float64(baseValue(key, 100, 2000)) // 100–2000 MHz base
 
 	numSamples := int(window.Hours() / 24 * samplesPerDay)
 	if numSamples < 10 {
 		numSamples = 10
 	}
 
-	rng := seededRng(job + group + task + "cpu")
+	rng := seededRng(key + "cpu")
 	samples := make([]float64, numSamples)
 
 	for i := range samples {
@@ -130,16 +133,17 @@ func (a *Adapter) QueryCPU(ctx context.Context, job, group, task, namespace stri
 }
 
 // QueryMemory returns fake memory usage samples in MB for the given task.
-func (a *Adapter) QueryMemory(ctx context.Context, job, group, task, namespace string, window time.Duration) ([]float64, error) {
-	sc := pickScenario(job + group + task)
-	baseMB := float64(baseValue(job+group+task, 64, 4096)) // 64–4096 MB base
+func (a *Adapter) QueryMemory(ctx context.Context, task nomad.TaskSpec, window time.Duration) ([]float64, error) {
+	key := task.Job + task.Group + task.Task
+	sc := pickScenario(key)
+	baseMB := float64(baseValue(key, 64, 4096)) // 64–4096 MB base
 
 	numSamples := int(window.Hours() / 24 * samplesPerDay)
 	if numSamples < 10 {
 		numSamples = 10
 	}
 
-	rng := seededRng(job + group + task + "mem")
+	rng := seededRng(key + "mem")
 	samples := make([]float64, numSamples)
 
 	// Memory typically grows slowly over time (gradual leak pattern or just

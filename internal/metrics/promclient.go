@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
@@ -13,14 +14,23 @@ import (
 	"github.com/prometheus/common/model"
 )
 
+const (
+	// targetSteps is the desired number of data points per query window.
+	// More steps = finer resolution but more load on Prometheus.
+	targetSteps = 200
+
+	minStep = 15 * time.Second
+	maxStep = 5 * time.Minute
+)
+
 // PromClient is a thin wrapper around the official Prometheus Go client.
 // It works with any Prometheus-compatible backend, including VictoriaMetrics.
 type PromClient struct {
-	api promv1.API
+	api   promv1.API
+	Debug bool // when true, prints every PromQL query to stderr before execution
 }
 
 // NewPromClient creates a PromClient pointed at the given address.
-// This works for Prometheus and VictoriaMetrics (API-compatible).
 func NewPromClient(address string) (*PromClient, error) {
 	client, err := api.NewClient(api.Config{
 		Address: address,
@@ -32,37 +42,29 @@ func NewPromClient(address string) (*PromClient, error) {
 	return &PromClient{api: promv1.NewAPI(client)}, nil
 }
 
-// QueryInstant executes a PromQL instant query and returns the scalar/vector
-// result values as a []float64. It is used for range aggregation queries like
-// quantile_over_time(...[7d]).
-func (c *PromClient) QueryInstant(ctx context.Context, query string) ([]float64, error) {
-	result, warnings, err := c.api.Query(ctx, query, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("prometheus query %q: %w", query, err)
+// stepFor computes an appropriate range query step for the given window:
+// window/targetSteps, clamped between minStep and maxStep.
+func stepFor(window time.Duration) time.Duration {
+	step := window / targetSteps
+	if step < minStep {
+		step = minStep
 	}
-	for _, w := range warnings {
-		fmt.Printf("prometheus warning: %s\n", w)
+	if step > maxStep {
+		step = maxStep
 	}
-
-	var values []float64
-	switch v := result.(type) {
-	case model.Vector:
-		for _, sample := range v {
-			values = append(values, float64(sample.Value))
-		}
-	case *model.Scalar:
-		values = append(values, float64(v.Value))
-	}
-
-	return values, nil
+	return step
 }
 
-// QueryRange executes a PromQL range query and returns all sample values
-// across the time range. Useful when you want raw samples for local percentile
-// computation rather than relying on server-side quantile_over_time.
-func (c *PromClient) QueryRange(ctx context.Context, query string, window time.Duration, step time.Duration) ([]float64, error) {
+// QueryRange executes a PromQL range query over [now-window, now] and returns
+// all sample values. The step is derived automatically from the window size.
+func (c *PromClient) QueryRange(ctx context.Context, query string, window time.Duration) ([]float64, error) {
 	end := time.Now()
 	start := end.Add(-window)
+	step := stepFor(window)
+
+	if c.Debug {
+		fmt.Fprintf(os.Stderr, "\n  [debug] window=%s step=%s\n  [debug] query: %s\n\n", window, step, query)
+	}
 
 	result, warnings, err := c.api.QueryRange(ctx, query, promv1.Range{
 		Start: start,
@@ -70,10 +72,10 @@ func (c *PromClient) QueryRange(ctx context.Context, query string, window time.D
 		Step:  step,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("prometheus range query %q: %w", query, err)
+		return nil, fmt.Errorf("prometheus range query: %w", err)
 	}
 	for _, w := range warnings {
-		fmt.Printf("prometheus warning: %s\n", w)
+		fmt.Fprintf(os.Stderr, "  prometheus warning: %s\n", w)
 	}
 
 	var values []float64

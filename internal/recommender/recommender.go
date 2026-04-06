@@ -14,9 +14,13 @@ import (
 //
 // For CPU: values are in MHz.
 // For Memory: values are in MB.
+//
+// The full TaskSpec is passed so adapters can choose their preferred label
+// strategy — e.g. cAdvisor can fall back to AllocIDs when job-name labels
+// are not present on container metrics.
 type MetricsBackend interface {
-	QueryCPU(ctx context.Context, job, group, task, namespace string, window time.Duration) ([]float64, error)
-	QueryMemory(ctx context.Context, job, group, task, namespace string, window time.Duration) ([]float64, error)
+	QueryCPU(ctx context.Context, task nomad.TaskSpec, window time.Duration) ([]float64, error)
+	QueryMemory(ctx context.Context, task nomad.TaskSpec, window time.Duration) ([]float64, error)
 }
 
 // Config controls the recommendation strategy.
