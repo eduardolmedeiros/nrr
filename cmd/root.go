@@ -17,6 +17,7 @@ import (
 
 var (
 	nomadAddress      string
+	nomadToken        string
 	prometheusAddress string
 	metricsSource     string
 	windowStr         string
@@ -56,9 +57,11 @@ func Execute() {
 
 func init() {
 	// Connection flags
-	rootCmd.Flags().StringVar(&nomadAddress, "nomad-address", "http://localhost:4646",
+	rootCmd.PersistentFlags().StringVar(&nomadAddress, "nomad-address", "http://localhost:4646",
 		"Nomad API address")
-	rootCmd.Flags().StringVar(&prometheusAddress, "prometheus-address", "http://localhost:9090",
+	rootCmd.PersistentFlags().StringVar(&nomadToken, "nomad-token", "",
+		"Nomad ACL token (SecretID). Falls back to NOMAD_TOKEN env var if not set")
+	rootCmd.PersistentFlags().StringVar(&prometheusAddress, "prometheus-address", "http://localhost:9090",
 		"Prometheus (or VictoriaMetrics) address — VictoriaMetrics is API-compatible, just pass its URL")
 
 	// Metrics source
@@ -120,7 +123,7 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 		tasks = mockTasks()
 		fmt.Fprintf(os.Stderr, "Mock mode: using %d synthetic tasks (no Nomad API needed).\n", len(tasks))
 	} else {
-		nomadClient, err := nomad.NewClient(nomadAddress)
+		nomadClient, err := nomad.NewClient(nomadAddress, nomadToken)
 		if err != nil {
 			return fmt.Errorf("connecting to Nomad at %s: %w", nomadAddress, err)
 		}

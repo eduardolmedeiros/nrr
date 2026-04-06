@@ -34,9 +34,14 @@ type Client struct {
 }
 
 // NewClient creates a new Nomad API client pointing at the given address.
-func NewClient(address string) (*Client, error) {
+// token is an optional ACL token (SecretID). If empty, the NOMAD_TOKEN
+// environment variable is used automatically via DefaultConfig.
+func NewClient(address, token string) (*Client, error) {
 	cfg := nomadapi.DefaultConfig()
 	cfg.Address = address
+	if token != "" {
+		cfg.SecretID = token
+	}
 
 	client, err := nomadapi.NewClient(cfg)
 	if err != nil {
