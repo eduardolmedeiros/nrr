@@ -213,22 +213,32 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 // usage scenarios defined in the mock adapter (underutilised, well-sized,
 // spiky, hungry). These let you see all recommendation flavours in one run.
 func mockTasks() []nomad.TaskSpec {
+	// mockAllocIDs generates fake alloc UUIDs so the ALLOCS column renders
+	// a realistic count rather than "-" in mock mode.
+	fakeAllocs := func(n int, prefix string) []string {
+		ids := make([]string, n)
+		for i := range ids {
+			ids[i] = fmt.Sprintf("%s-mock-alloc-%04d", prefix, i+1)
+		}
+		return ids
+	}
+
 	return []nomad.TaskSpec{
 		// Underutilised: declared resources much larger than actual usage
-		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "nginx", CPUMHz: 2000, MemoryMB: 1024, JobType: "service"},
-		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "envoy", CPUMHz: 1000, MemoryMB: 512, JobType: "service"},
+		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "nginx", CPUMHz: 2000, MemoryMB: 1024, JobType: "service", AllocIDs: fakeAllocs(2, "api-gateway")},
+		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "envoy", CPUMHz: 1000, MemoryMB: 512, JobType: "service", AllocIDs: fakeAllocs(2, "api-gateway")},
 
 		// Well-sized: declared resources roughly match actual usage
-		{Namespace: "default", Job: "backend-api", Group: "app", Task: "server", CPUMHz: 500, MemoryMB: 256, JobType: "service"},
-		{Namespace: "default", Job: "backend-api", Group: "app", Task: "metrics-exporter", CPUMHz: 100, MemoryMB: 64, JobType: "service"},
+		{Namespace: "default", Job: "backend-api", Group: "app", Task: "server", CPUMHz: 500, MemoryMB: 256, JobType: "service", AllocIDs: fakeAllocs(1, "backend-api")},
+		{Namespace: "default", Job: "backend-api", Group: "app", Task: "metrics-exporter", CPUMHz: 100, MemoryMB: 64, JobType: "service", AllocIDs: fakeAllocs(1, "backend-api")},
 
 		// Spiky: low average but occasional bursts — tests P99 strategy
-		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "processor", CPUMHz: 4000, MemoryMB: 2048, JobType: "batch"},
-		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "scheduler", CPUMHz: 200, MemoryMB: 128, JobType: "batch"},
+		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "processor", CPUMHz: 4000, MemoryMB: 2048, JobType: "batch", AllocIDs: fakeAllocs(3, "batch-processor")},
+		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "scheduler", CPUMHz: 200, MemoryMB: 128, JobType: "batch", AllocIDs: fakeAllocs(3, "batch-processor")},
 
 		// Hungry: consistently using more than declared — recommendation will be higher
-		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "model-server", CPUMHz: 1000, MemoryMB: 2048, JobType: "service"},
-		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "feature-store", CPUMHz: 500, MemoryMB: 512, JobType: "service"},
+		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "model-server", CPUMHz: 1000, MemoryMB: 2048, JobType: "service", AllocIDs: fakeAllocs(2, "ml-inference")},
+		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "feature-store", CPUMHz: 500, MemoryMB: 512, JobType: "service", AllocIDs: fakeAllocs(2, "ml-inference")},
 	}
 }
 
