@@ -22,6 +22,7 @@ var (
 	windowStr         string
 	outputFormat      string
 	noColor           bool
+	debug             bool
 	namespace         string
 	jobFilter         string
 	cpuPercentile     float64
@@ -93,6 +94,8 @@ func init() {
 		"Output format: table | json | yaml | csv")
 	rootCmd.Flags().BoolVar(&noColor, "no-color", false,
 		"Disable ANSI colours in table output (useful when piping to a file)")
+	rootCmd.Flags().BoolVar(&debug, "debug", false,
+		"Print the PromQL queries sent to Prometheus before executing them")
 }
 
 func runRecommend(cmd *cobra.Command, args []string) error {
@@ -141,12 +144,14 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("initialising nomad-native metrics adapter: %w", err)
 		}
+		b.SetDebug(debug)
 		backend = b
 	case "cadvisor":
 		b, err := cadvisor.New(prometheusAddress)
 		if err != nil {
 			return fmt.Errorf("initialising cadvisor metrics adapter: %w", err)
 		}
+		b.SetDebug(debug)
 		backend = b
 	case "mock":
 		backend = mock.New()
@@ -165,13 +170,13 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 	// 4. Generate recommendations
 	var recommendations []recommender.Recommendation
 	for _, task := range tasks {
-		cpuSamples, err := backend.QueryCPU(ctx, task.Job, task.Group, task.Task, task.Namespace, window)
+		cpuSamples, err := backend.QueryCPU(ctx, task, window)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  WARN: CPU query failed for %s/%s/%s: %v\n",
 				task.Job, task.Group, task.Task, err)
 		}
 
-		memSamples, err := backend.QueryMemory(ctx, task.Job, task.Group, task.Task, task.Namespace, window)
+		memSamples, err := backend.QueryMemory(ctx, task, window)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  WARN: memory query failed for %s/%s/%s: %v\n",
 				task.Job, task.Group, task.Task, err)
