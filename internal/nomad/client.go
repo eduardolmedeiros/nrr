@@ -26,6 +26,9 @@ type TaskSpec struct {
 	// container_label_com_hashicorp_nomad_alloc_id when job/task name labels
 	// are not present.
 	AllocIDs []string
+
+	// JobType is the Nomad job scheduler type: service, batch, system, sysbatch.
+	JobType string
 }
 
 // Client wraps the Nomad API client.
@@ -133,12 +136,17 @@ func (c *Client) tasksFromJob(ctx context.Context, job *nomadapi.Job, namespace 
 				continue
 			}
 
+			jobType := ""
+			if job.Type != nil {
+				jobType = *job.Type
+			}
 			spec := TaskSpec{
 				Namespace: ns,
 				Job:       *job.ID,
 				Group:     *group.Name,
 				Task:      task.Name,
 				AllocIDs:  allocIDs,
+				JobType:   jobType,
 			}
 
 			if task.Resources != nil {

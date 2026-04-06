@@ -215,20 +215,20 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 func mockTasks() []nomad.TaskSpec {
 	return []nomad.TaskSpec{
 		// Underutilised: declared resources much larger than actual usage
-		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "nginx", CPUMHz: 2000, MemoryMB: 1024},
-		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "envoy", CPUMHz: 1000, MemoryMB: 512},
+		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "nginx", CPUMHz: 2000, MemoryMB: 1024, JobType: "service"},
+		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "envoy", CPUMHz: 1000, MemoryMB: 512, JobType: "service"},
 
 		// Well-sized: declared resources roughly match actual usage
-		{Namespace: "default", Job: "backend-api", Group: "app", Task: "server", CPUMHz: 500, MemoryMB: 256},
-		{Namespace: "default", Job: "backend-api", Group: "app", Task: "metrics-exporter", CPUMHz: 100, MemoryMB: 64},
+		{Namespace: "default", Job: "backend-api", Group: "app", Task: "server", CPUMHz: 500, MemoryMB: 256, JobType: "service"},
+		{Namespace: "default", Job: "backend-api", Group: "app", Task: "metrics-exporter", CPUMHz: 100, MemoryMB: 64, JobType: "service"},
 
 		// Spiky: low average but occasional bursts — tests P99 strategy
-		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "processor", CPUMHz: 4000, MemoryMB: 2048},
-		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "scheduler", CPUMHz: 200, MemoryMB: 128},
+		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "processor", CPUMHz: 4000, MemoryMB: 2048, JobType: "batch"},
+		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "scheduler", CPUMHz: 200, MemoryMB: 128, JobType: "batch"},
 
 		// Hungry: consistently using more than declared — recommendation will be higher
-		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "model-server", CPUMHz: 1000, MemoryMB: 2048},
-		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "feature-store", CPUMHz: 500, MemoryMB: 512},
+		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "model-server", CPUMHz: 1000, MemoryMB: 2048, JobType: "service"},
+		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "feature-store", CPUMHz: 500, MemoryMB: 512, JobType: "service"},
 	}
 }
 

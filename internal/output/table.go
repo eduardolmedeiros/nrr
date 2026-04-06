@@ -10,8 +10,7 @@ import (
 	"github.com/nrr-project/nrr/internal/recommender"
 )
 
-// ANSI colour codes. Set TableFormatter.NoColor = true to suppress them
-// (useful when piping output to a file).
+// ANSI colour codes. Set TableFormatter.NoColor = true to suppress them.
 const (
 	ansiReset  = "\033[0m"
 	ansiBold   = "\033[1m"
@@ -19,6 +18,7 @@ const (
 	ansiGreen  = "\033[32m"
 	ansiYellow = "\033[33m"
 	ansiCyan   = "\033[36m"
+	ansiRed    = "\033[31m"
 )
 
 // Box-drawing characters (rounded corners).
@@ -42,14 +42,14 @@ type TableFormatter struct {
 	NoColor bool
 }
 
+// col describes one table column.
 type col struct {
-	header string
-	width  int // visual width in terminal columns (runes, not bytes)
+	header    string
+	width     int  // visual width in terminal columns
+	rightAlign bool // numbers are right-aligned, text is left-aligned
 }
 
-// vlen returns the visual width of s in terminal columns.
-// Uses rune count, which is correct for the characters we use
-// (box-drawing chars, arrows, ASCII — none are double-width).
+// vlen returns the visual width of s in terminal columns (rune count).
 func vlen(s string) int {
 	return utf8.RuneCountInString(s)
 }
@@ -60,57 +60,92 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 		w = os.Stdout
 	}
 
-	// ---------- build display rows ----------
+	cc := f.c
+
+	// ── build display rows ────────────────────────────────────────────────────
 	type row struct {
-		namespace string
-		job       string
-		group     string
-		task      string
-		cpuCell   string // plain text (no ANSI) — used for visual-width math
-		memCell   string
-		cpuColor  string // ANSI prefix applied when rendering
-		memColor  string
+		num      string
+		ns       string
+		job      string
+		jobType  string
+		group    string
+		task     string
+		allocs   string
+		cpuNow   string
+		cpuRec   string
+		cpuColor string
+		memNow   string
+		memRec   string
+		memColor string
 	}
 
 	rows := make([]row, 0, len(recs))
-	for _, r := range recs {
-		cpuPlain, cpuAnsi := resourceCell(r.CurrentCPUMHz, r.RecommendedCPUMHz, r.CPUDiffMHz)
-		memPlain, memAnsi := resourceCell(r.CurrentMemoryMB, r.RecommendedMemoryMB, r.MemDiffMB)
+	for i, r := range recs {
+		cpuNow, cpuRec, cpuColor := resourceCells(r.CurrentCPUMHz, r.RecommendedCPUMHz, r.CPUDiffMHz, r.CPUSamples)
+		memNow, memRec, memColor := resourceCells(r.CurrentMemoryMB, r.RecommendedMemoryMB, r.MemDiffMB, r.MemSamples)
+
+		allocs := "-"
+		if n := len(r.Task.AllocIDs); n > 0 {
+			allocs = fmt.Sprintf("%d", n)
+		}
+
+		jobType := r.Task.JobType
+		if jobType == "" {
+			jobType = "-"
+		}
+
 		rows = append(rows, row{
-			namespace: r.Task.Namespace,
-			job:       r.Task.Job,
-			group:     r.Task.Group,
-			task:      r.Task.Task,
-			cpuCell:   cpuPlain,
-			memCell:   memPlain,
-			cpuColor:  cpuAnsi,
-			memColor:  memAnsi,
+			num:      fmt.Sprintf("%d", i+1),
+			ns:       r.Task.Namespace,
+			job:      r.Task.Job,
+			jobType:  jobType,
+			group:    r.Task.Group,
+			task:     r.Task.Task,
+			allocs:   allocs,
+			cpuNow:   cpuNow,
+			cpuRec:   cpuRec,
+			cpuColor: cpuColor,
+			memNow:   memNow,
+			memRec:   memRec,
+			memColor: memColor,
 		})
 	}
 
-	// ---------- compute column widths (all in runes / visual columns) ----------
+	// ── compute column widths ─────────────────────────────────────────────────
 	cols := []col{
-		{"NAMESPACE", 9},
-		{"JOB", 3},
-		{"GROUP", 5},
-		{"TASK", 4},
-		{"CPU (MHz)", 9},
-		{"MEMORY (MB)", 11},
+		{"#", 1, true},
+		{"NAMESPACE", 9, false},
+		{"JOB", 3, false},
+		{"TYPE", 4, false},
+		{"GROUP", 5, false},
+		{"TASK", 4, false},
+		{"ALLOCS", 6, true},
+		{"CPU NOW", 7, true},
+		{"CPU REC", 7, false},
+		{"MEM NOW", 7, true},
+		{"MEM REC", 7, false},
 	}
+
 	for _, r := range rows {
-		cols[0].width = maxInt(cols[0].width, vlen(r.namespace))
-		cols[1].width = maxInt(cols[1].width, vlen(r.job))
-		cols[2].width = maxInt(cols[2].width, vlen(r.group))
-		cols[3].width = maxInt(cols[3].width, vlen(r.task))
-		cols[4].width = maxInt(cols[4].width, vlen(r.cpuCell))
-		cols[5].width = maxInt(cols[5].width, vlen(r.memCell))
+		cols[0].width = maxInt(cols[0].width, vlen(r.num))
+		cols[1].width = maxInt(cols[1].width, vlen(r.ns))
+		cols[2].width = maxInt(cols[2].width, vlen(r.job))
+		cols[3].width = maxInt(cols[3].width, vlen(r.jobType))
+		cols[4].width = maxInt(cols[4].width, vlen(r.group))
+		cols[5].width = maxInt(cols[5].width, vlen(r.task))
+		cols[6].width = maxInt(cols[6].width, vlen(r.allocs))
+		cols[7].width = maxInt(cols[7].width, vlen(r.cpuNow))
+		cols[8].width = maxInt(cols[8].width, vlen(r.cpuRec))
+		cols[9].width = maxInt(cols[9].width, vlen(r.memNow))
+		cols[10].width = maxInt(cols[10].width, vlen(r.memRec))
 	}
-	cols[4].width = maxInt(cols[4].width, 22)
-	cols[5].width = maxInt(cols[5].width, 22)
+	// minimum widths for resource columns so short values don't look cramped
+	cols[7].width = maxInt(cols[7].width, 7)
+	cols[8].width = maxInt(cols[8].width, 12)
+	cols[9].width = maxInt(cols[9].width, 7)
+	cols[10].width = maxInt(cols[10].width, 12)
 
-	cc := f.c // bound colour helper
-
-	// ---------- border builder ----------
+	// ── border helpers ────────────────────────────────────────────────────────
 	hRule := func(left, mid, right string) string {
 		var sb strings.Builder
 		sb.WriteString(left)
@@ -124,13 +159,24 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 		return sb.String()
 	}
 
-	// pad renders s left-aligned in a visual field of `width` columns,
-	// with 1 space of padding on each side. Uses vlen for correct Unicode width.
-	pad := func(s string, width int) string {
+	// padL left-aligns s in a field of `width` visual columns (1-space padding each side).
+	padL := func(s string, width int) string {
 		return " " + s + strings.Repeat(" ", width-vlen(s)+1)
 	}
 
-	// ---------- render ----------
+	// padR right-aligns s in a field of `width` visual columns (1-space padding each side).
+	padR := func(s string, width int) string {
+		return strings.Repeat(" ", width-vlen(s)+1) + s + " "
+	}
+
+	padCell := func(s string, c col) string {
+		if c.rightAlign {
+			return padR(s, c.width)
+		}
+		return padL(s, c.width)
+	}
+
+	// ── render ────────────────────────────────────────────────────────────────
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  %sNRR%s — Nomad Resource Recommender\n\n",
 		cc(ansiBold+ansiCyan), cc(ansiReset))
@@ -142,7 +188,7 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 	for _, c := range cols {
 		hdr.WriteString(bV)
 		hdr.WriteString(cc(ansiBold))
-		hdr.WriteString(pad(c.header, c.width))
+		hdr.WriteString(padCell(c.header, c))
 		hdr.WriteString(cc(ansiReset))
 	}
 	hdr.WriteString(bV)
@@ -153,47 +199,62 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 	// Data rows
 	for _, r := range rows {
 		var sb strings.Builder
+		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.num, cols[0])); sb.WriteString(cc(ansiReset))
+		sb.WriteString(bV); sb.WriteString(padCell(r.ns, cols[1]))
+		sb.WriteString(bV); sb.WriteString(padCell(r.job, cols[2]))
+		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.jobType, cols[3])); sb.WriteString(cc(ansiReset))
+		sb.WriteString(bV); sb.WriteString(padCell(r.group, cols[4]))
+		sb.WriteString(bV); sb.WriteString(padCell(r.task, cols[5]))
+		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.allocs, cols[6])); sb.WriteString(cc(ansiReset))
+
+		// CPU NOW — plain, right-aligned
 		sb.WriteString(bV)
-		sb.WriteString(pad(r.namespace, cols[0].width))
+		sb.WriteString(padCell(r.cpuNow, cols[7]))
+
+		// CPU REC — coloured
 		sb.WriteString(bV)
-		sb.WriteString(pad(r.job, cols[1].width))
-		sb.WriteString(bV)
-		sb.WriteString(pad(r.group, cols[2].width))
-		sb.WriteString(bV)
-		sb.WriteString(pad(r.task, cols[3].width))
-		sb.WriteString(bV)
-		// Resource cells: colour wraps the content but must not affect width math.
 		sb.WriteString(" ")
 		sb.WriteString(cc(r.cpuColor))
-		sb.WriteString(r.cpuCell)
+		sb.WriteString(r.cpuRec)
 		sb.WriteString(cc(ansiReset))
-		sb.WriteString(strings.Repeat(" ", cols[4].width-vlen(r.cpuCell)+1))
+		sb.WriteString(strings.Repeat(" ", cols[8].width-vlen(r.cpuRec)+1))
+
+		// MEM NOW — plain, right-aligned
+		sb.WriteString(bV)
+		sb.WriteString(padCell(r.memNow, cols[9]))
+
+		// MEM REC — coloured
 		sb.WriteString(bV)
 		sb.WriteString(" ")
 		sb.WriteString(cc(r.memColor))
-		sb.WriteString(r.memCell)
+		sb.WriteString(r.memRec)
 		sb.WriteString(cc(ansiReset))
-		sb.WriteString(strings.Repeat(" ", cols[5].width-vlen(r.memCell)+1))
+		sb.WriteString(strings.Repeat(" ", cols[10].width-vlen(r.memRec)+1))
+
 		sb.WriteString(bV)
 		fmt.Fprintln(w, sb.String())
 	}
 
 	fmt.Fprintln(w, hRule(bBotL, bBotT, bBotR))
 
-	// Summary line
-	savings, overage := 0, 0
+	// ── summary line ─────────────────────────────────────────────────────────
+	var savings, overage, ok int
 	for _, r := range recs {
-		if r.CPUDiffMHz < 0 || r.MemDiffMB < 0 {
+		switch {
+		case r.CPUDiffMHz < 0 || r.MemDiffMB < 0:
 			savings++
-		}
-		if r.CPUDiffMHz > 0 || r.MemDiffMB > 0 {
+		case r.CPUDiffMHz > 0 || r.MemDiffMB > 0:
 			overage++
+		default:
+			ok++
 		}
 	}
-	fmt.Fprintf(w, "\n  %d task(s)  ·  %s%d can be downsized%s  ·  %s%d need more resources%s\n\n",
+	fmt.Fprintf(w,
+		"\n  %d task(s)  ·  %s↓ %d can be downsized%s  ·  %s↑ %d need more resources%s  ·  %s✓ %d well-sized%s\n\n",
 		len(recs),
 		cc(ansiGreen), savings, cc(ansiReset),
 		cc(ansiYellow), overage, cc(ansiReset),
+		cc(ansiDim), ok, cc(ansiReset),
 	)
 
 	return nil
@@ -207,11 +268,23 @@ func (f *TableFormatter) c(code string) string {
 	return code
 }
 
-// resourceCell returns the plain display string and the ANSI colour code for
-// one resource column. Format: "current → recommended  ±pct%"
-// The returned plain string contains only printable runes (no ANSI codes),
-// so vlen() on it gives the correct visual width.
-func resourceCell(current, recommended, diff int) (plain, color string) {
+// resourceCells returns the "now" string, the "recommended" string (with % diff),
+// and the ANSI colour for the recommended value.
+// samples == 0 means no data was available for the recommendation.
+func resourceCells(current, recommended, diff, samples int) (now, rec, color string) {
+	if current > 0 {
+		now = fmt.Sprintf("%d", current)
+	} else {
+		now = "-"
+	}
+
+	if samples == 0 {
+		// No metrics data — recommendation is just the current value unchanged.
+		rec = fmt.Sprintf("%d", recommended)
+		color = ansiDim
+		return
+	}
+
 	pct := 0.0
 	if current > 0 {
 		pct = float64(recommended-current) / float64(current) * 100
@@ -221,17 +294,17 @@ func resourceCell(current, recommended, diff int) (plain, color string) {
 	if diff > 0 {
 		sign = "+"
 	}
-	plain = fmt.Sprintf("%d → %d  %s%.0f%%", current, recommended, sign, pct)
+	rec = fmt.Sprintf("%d (%s%.0f%%)", recommended, sign, pct)
 
 	switch {
 	case diff < 0:
-		color = ansiGreen  // saving resources — good
+		color = ansiGreen
 	case diff > 0:
-		color = ansiYellow // needs more — warn
+		color = ansiYellow
 	default:
 		color = ansiDim
 	}
-	return plain, color
+	return
 }
 
 func maxInt(a, b int) int {
