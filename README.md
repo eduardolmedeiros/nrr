@@ -35,7 +35,7 @@ Inspired by [KRR](https://github.com/robusta-dev/krr) for Kubernetes.
 ## Installation
 
 ```bash
-git clone https://github.com/nrr-project/nrr
+git clone https://github.com/eduardolmedeiros/nrr
 cd nrr
 go build -o nrr .
 ```
@@ -163,7 +163,6 @@ nrr/
 ## Roadmap
 
 - [ ] Multi-namespace scan (`--namespace '*'`)
-- [ ] Nomad ACL token support (`--token`)
 - [ ] Unit tests for the recommender engine
 - [ ] Apply mode — generate updated job HCL snippets
 - [ ] GitHub Actions CI
