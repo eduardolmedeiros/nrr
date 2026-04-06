@@ -162,7 +162,6 @@ nrr/
 
 ## Roadmap
 
-- [ ] Multi-namespace scan (`--namespace '*'`)
 - [ ] Unit tests for the recommender engine
 - [ ] Apply mode — generate updated job HCL snippets
 - [ ] GitHub Actions CI

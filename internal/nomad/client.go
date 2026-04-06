@@ -58,6 +58,11 @@ func (c *Client) DiscoverTasks(ctx context.Context, namespace, jobFilter string)
 	qOpts = qOpts.WithContext(ctx)
 
 	if jobFilter != "" {
+		// Wildcard namespace can't be used for a single-job lookup.
+		// Search across all namespaces and pick the first match.
+		if namespace == "*" {
+			return c.findJobAcrossNamespaces(ctx, jobFilter)
+		}
 		job, _, err := c.api.Jobs().Info(jobFilter, qOpts)
 		if err != nil {
 			return nil, fmt.Errorf("fetching job %q: %w", jobFilter, err)
@@ -75,11 +80,16 @@ func (c *Client) DiscoverTasks(ctx context.Context, namespace, jobFilter string)
 		if stub.Status != "running" {
 			continue
 		}
-		job, _, err := c.api.Jobs().Info(stub.ID, qOpts)
+		// When namespace is "*" the list returns jobs from all namespaces,
+		// but per-job calls (Info, Allocations) require the real namespace.
+		jobOpts := &nomadapi.QueryOptions{Namespace: stub.Namespace}
+		jobOpts = jobOpts.WithContext(ctx)
+
+		job, _, err := c.api.Jobs().Info(stub.ID, jobOpts)
 		if err != nil {
 			return nil, fmt.Errorf("fetching job %q: %w", stub.ID, err)
 		}
-		jobTasks, err := c.tasksFromJob(ctx, job, namespace, qOpts)
+		jobTasks, err := c.tasksFromJob(ctx, job, stub.Namespace, jobOpts)
 		if err != nil {
 			return nil, err
 		}
@@ -145,6 +155,34 @@ func (c *Client) tasksFromJob(ctx context.Context, job *nomadapi.Job, namespace 
 	}
 
 	return tasks, nil
+}
+
+// findJobAcrossNamespaces is used when namespace="*" and a jobFilter is set.
+// It lists all jobs across namespaces and fetches the one matching jobFilter.
+func (c *Client) findJobAcrossNamespaces(ctx context.Context, jobID string) ([]TaskSpec, error) {
+	qOpts := &nomadapi.QueryOptions{Namespace: "*"}
+	qOpts = qOpts.WithContext(ctx)
+
+	stubs, _, err := c.api.Jobs().List(qOpts)
+	if err != nil {
+		return nil, fmt.Errorf("listing jobs: %w", err)
+	}
+
+	for _, stub := range stubs {
+		if stub.ID != jobID {
+			continue
+		}
+		jobOpts := &nomadapi.QueryOptions{Namespace: stub.Namespace}
+		jobOpts = jobOpts.WithContext(ctx)
+
+		job, _, err := c.api.Jobs().Info(stub.ID, jobOpts)
+		if err != nil {
+			return nil, fmt.Errorf("fetching job %q: %w", stub.ID, err)
+		}
+		return c.tasksFromJob(ctx, job, stub.Namespace, jobOpts)
+	}
+
+	return nil, fmt.Errorf("job %q not found in any namespace", jobID)
 }
 
 // runningAllocsByGroup returns a map of group name → running alloc IDs.
