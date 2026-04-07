@@ -35,8 +35,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "nrr",
-	Short: "NRR — Nomad Resource Recommender",
+	Use:     "nrr",
+	Version: Version,
+	Short:   "NRR — Nomad Resource Recommender",
 	Long: `NRR analyses historical CPU and memory usage from Prometheus (or VictoriaMetrics)
 and recommends right-sized resource specs for your Nomad jobs.
 
