@@ -1,6 +1,6 @@
 module github.com/nrr-project/nrr
 
-go 1.22
+go 1.25
 
 require (
 	github.com/hashicorp/nomad/api v0.0.0-20230103221135-ce00d683f9be
