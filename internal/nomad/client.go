@@ -29,6 +29,10 @@ type TaskSpec struct {
 
 	// JobType is the Nomad job scheduler type: service, batch, system, sysbatch.
 	JobType string
+
+	// Region and Datacenters come from the job spec (always set in Nomad).
+	Region      string
+	Datacenters []string
 }
 
 // Client wraps the Nomad API client.
@@ -36,14 +40,36 @@ type Client struct {
 	api *nomadapi.Client
 }
 
+// TLSConfig holds optional mTLS parameters for the Nomad API connection.
+type TLSConfig struct {
+	CACert     string // path to CA certificate file
+	ClientCert string // path to client certificate file
+	ClientKey  string // path to client key file
+	Insecure   bool   // skip TLS certificate verification
+}
+
 // NewClient creates a new Nomad API client pointing at the given address.
 // token is an optional ACL token (SecretID). If empty, the NOMAD_TOKEN
 // environment variable is used automatically via DefaultConfig.
-func NewClient(address, token string) (*Client, error) {
+func NewClient(address, token string, tls TLSConfig) (*Client, error) {
 	cfg := nomadapi.DefaultConfig()
-	cfg.Address = address
+	if address != "" {
+		cfg.Address = address
+	}
 	if token != "" {
 		cfg.SecretID = token
+	}
+	if tls.CACert != "" {
+		cfg.TLSConfig.CACert = tls.CACert
+	}
+	if tls.ClientCert != "" {
+		cfg.TLSConfig.ClientCert = tls.ClientCert
+	}
+	if tls.ClientKey != "" {
+		cfg.TLSConfig.ClientKey = tls.ClientKey
+	}
+	if tls.Insecure {
+		cfg.TLSConfig.Insecure = tls.Insecure
 	}
 
 	client, err := nomadapi.NewClient(cfg)
@@ -140,13 +166,19 @@ func (c *Client) tasksFromJob(ctx context.Context, job *nomadapi.Job, namespace 
 			if job.Type != nil {
 				jobType = *job.Type
 			}
+			region := ""
+			if job.Region != nil {
+				region = *job.Region
+			}
 			spec := TaskSpec{
-				Namespace: ns,
-				Job:       *job.ID,
-				Group:     *group.Name,
-				Task:      task.Name,
-				AllocIDs:  allocIDs,
-				JobType:   jobType,
+				Namespace:   ns,
+				Job:         *job.ID,
+				Group:       *group.Name,
+				Task:        task.Name,
+				AllocIDs:    allocIDs,
+				JobType:     jobType,
+				Region:      region,
+				Datacenters: job.Datacenters,
 			}
 
 			if task.Resources != nil {
