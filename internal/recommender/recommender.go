@@ -112,6 +112,12 @@ func Recommend(task nomad.TaskSpec, cpuSamples, memSamples []float64, cfg Config
 	return rec
 }
 
+// Percentile returns the p-th quantile (0.0–1.0) of the given sample slice.
+// The input slice is not modified.
+func Percentile(samples []float64, p float64) float64 {
+	return percentile(samples, p)
+}
+
 // percentile returns the p-th quantile (0.0–1.0) of the given sample slice.
 // The slice is sorted in-place.
 func percentile(samples []float64, p float64) float64 {

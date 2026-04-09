@@ -233,6 +233,11 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 		}
 
 		rec := recommender.Recommend(task, cpuSamples, memSamples, cfg)
+
+		if debug {
+			printDebugCalc(task, cpuSamples, memSamples, cfg, rec)
+		}
+
 		recommendations = append(recommendations, rec)
 	}
 
@@ -272,6 +277,57 @@ func mockTasks() []nomad.TaskSpec {
 		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "model-server", CPUMHz: 1000, MemoryMB: 2048, JobType: "service", AllocIDs: fakeAllocs(2, "ml-inference"), Region: "global", Datacenters: []string{"dc1"}},
 		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "feature-store", CPUMHz: 500, MemoryMB: 512, JobType: "service", AllocIDs: fakeAllocs(2, "ml-inference"), Region: "global", Datacenters: []string{"dc1"}},
 	}
+}
+
+// printDebugCalc prints a human-readable breakdown of how the recommendation
+// was calculated for a single task — useful for app developers to understand
+// what metrics were observed and how the final values were derived.
+func printDebugCalc(task nomad.TaskSpec, cpuSamples, memSamples []float64, cfg recommender.Config, rec recommender.Recommendation) {
+	fmt.Fprintf(os.Stderr, "\n  [debug] %s / %s / %s\n", task.Job, task.Group, task.Task)
+
+	if len(cpuSamples) > 0 {
+		cpuMin, cpuMax := minMax(cpuSamples)
+		cpuP := recommender.Percentile(cpuSamples, cfg.CPUPercentile)
+		cpuBuffered := cpuP * (1 + cfg.CPUBuffer)
+		fmt.Fprintf(os.Stderr,
+			"    CPU  %d samples  min=%.0f max=%.0f  P%.0f=%.0f MHz  × %.2f buffer = %.0f  → %d MHz\n",
+			len(cpuSamples), cpuMin, cpuMax,
+			cfg.CPUPercentile*100, cpuP,
+			1+cfg.CPUBuffer, cpuBuffered,
+			rec.RecommendedCPUMHz,
+		)
+	} else {
+		fmt.Fprintf(os.Stderr, "    CPU  no samples — keeping current: %d MHz\n", task.CPUMHz)
+	}
+
+	if len(memSamples) > 0 {
+		memMin, memMax := minMax(memSamples)
+		memP := recommender.Percentile(memSamples, cfg.MemPercentile)
+		memBuffered := memP * (1 + cfg.MemBuffer)
+		fmt.Fprintf(os.Stderr,
+			"    MEM  %d samples  min=%.0f max=%.0f  P%.0f=%.0f MB  × %.2f buffer = %.0f  → %d MB\n",
+			len(memSamples), memMin, memMax,
+			cfg.MemPercentile*100, memP,
+			1+cfg.MemBuffer, memBuffered,
+			rec.RecommendedMemoryMB,
+		)
+	} else {
+		fmt.Fprintf(os.Stderr, "    MEM  no samples — keeping current: %d MB\n", task.MemoryMB)
+	}
+}
+
+// minMax returns the minimum and maximum values in a non-empty slice.
+func minMax(samples []float64) (min, max float64) {
+	min, max = samples[0], samples[0]
+	for _, v := range samples[1:] {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+	}
+	return
 }
 
 // parseDuration parses durations like "7d", "24h", "30m".
