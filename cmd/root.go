@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/nrr-project/nrr/internal/metrics/cadvisor"
@@ -13,26 +14,10 @@ import (
 	"github.com/nrr-project/nrr/internal/output"
 	"github.com/nrr-project/nrr/internal/recommender"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
-var (
-	nomadAddress      string
-	nomadToken        string
-	prometheusAddress string
-	metricsSource     string
-	windowStr         string
-	outputFormat      string
-	noColor           bool
-	debug             bool
-	namespace         string
-	jobFilter         string
-	cpuPercentile     float64
-	memPercentile     float64
-	cpuBuffer         float64
-	memBuffer         float64
-	minCPUMHz         int
-	minMemoryMB       int
-)
+var configFile string
 
 var rootCmd = &cobra.Command{
 	Use:     "nrr",
@@ -57,90 +42,145 @@ func Execute() {
 }
 
 func init() {
+	cobra.OnInitialize(initConfig)
+
+	rootCmd.PersistentFlags().StringVar(&configFile, "config", "",
+		"Config file (default: .nrr/config.yaml, then $XDG_CONFIG_HOME/nrr/config.yaml)")
+
 	// Connection flags
-	rootCmd.PersistentFlags().StringVar(&nomadAddress, "nomad-address", "http://localhost:4646",
-		"Nomad API address")
-	rootCmd.PersistentFlags().StringVar(&nomadToken, "nomad-token", "",
-		"Nomad ACL token (SecretID). Falls back to NOMAD_TOKEN env var if not set")
-	rootCmd.PersistentFlags().StringVar(&prometheusAddress, "prometheus-address", "http://localhost:9090",
-		"Prometheus (or VictoriaMetrics) address — VictoriaMetrics is API-compatible, just pass its URL")
+	rootCmd.PersistentFlags().String("nomad-address", "", "Nomad API address (env: NOMAD_ADDR)")
+	rootCmd.PersistentFlags().String("nomad-token", "", "Nomad ACL token (env: NOMAD_TOKEN)")
+	rootCmd.PersistentFlags().String("nomad-ca-cert", "", "Path to CA certificate for Nomad TLS (env: NOMAD_CACERT)")
+	rootCmd.PersistentFlags().String("nomad-client-cert", "", "Path to client certificate for Nomad mTLS (env: NOMAD_CLIENT_CERT)")
+	rootCmd.PersistentFlags().String("nomad-client-key", "", "Path to client key for Nomad mTLS (env: NOMAD_CLIENT_KEY)")
+	rootCmd.PersistentFlags().Bool("nomad-tls-insecure", false, "Skip TLS certificate verification (not recommended in production)")
+	rootCmd.PersistentFlags().String("prometheus-address", "http://localhost:9090",
+		"Prometheus (or VictoriaMetrics) address")
 
 	// Metrics source
-	rootCmd.Flags().StringVar(&metricsSource, "metrics-source", "nomad-native",
-		"Metrics source: nomad-native | cadvisor | mock")
+	rootCmd.Flags().String("metrics-source", "nomad-native", "Metrics source: nomad-native | cadvisor | mock")
 
 	// Scope filters
-	rootCmd.Flags().StringVar(&namespace, "namespace", "default",
-		"Nomad namespace to scan (use '*' for all namespaces)")
-	rootCmd.Flags().StringVar(&jobFilter, "job", "",
-		"Filter by job name (empty = all jobs)")
+	rootCmd.Flags().String("namespace", "default", "Nomad namespace to scan (use '*' for all namespaces)")
+	rootCmd.Flags().String("job", "", "Filter by job name (empty = all jobs)")
 
 	// Analysis window
-	rootCmd.Flags().StringVar(&windowStr, "window", "7d",
-		"Historical data window (e.g. 1d, 3d, 7d, 14d)")
+	rootCmd.Flags().String("window", "7d", "Historical data window (e.g. 1d, 3d, 7d, 14d)")
 
 	// Recommendation strategy
-	rootCmd.Flags().Float64Var(&cpuPercentile, "cpu-percentile", 99,
-		"CPU usage percentile to use for recommendations (0–100)")
-	rootCmd.Flags().Float64Var(&memPercentile, "mem-percentile", 99,
-		"Memory usage percentile to use for recommendations (0–100)")
-	rootCmd.Flags().Float64Var(&cpuBuffer, "cpu-buffer", 15,
-		"Buffer % to add on top of the CPU recommendation")
-	rootCmd.Flags().Float64Var(&memBuffer, "mem-buffer", 15,
-		"Buffer % to add on top of the memory recommendation")
-	rootCmd.Flags().IntVar(&minCPUMHz, "min-cpu", 10,
-		"Minimum recommended CPU (MHz)")
-	rootCmd.Flags().IntVar(&minMemoryMB, "min-memory", 64,
-		"Minimum recommended memory (MB)")
+	rootCmd.Flags().Float64("cpu-percentile", 99, "CPU usage percentile to use for recommendations (0–100)")
+	rootCmd.Flags().Float64("mem-percentile", 99, "Memory usage percentile to use for recommendations (0–100)")
+	rootCmd.Flags().Float64("cpu-buffer", 15, "Buffer % to add on top of the CPU recommendation")
+	rootCmd.Flags().Float64("mem-buffer", 15, "Buffer % to add on top of the memory recommendation")
+	rootCmd.Flags().Int("min-cpu", 10, "Minimum recommended CPU (MHz)")
+	rootCmd.Flags().Int("min-memory", 64, "Minimum recommended memory (MB)")
 
 	// Output
-	rootCmd.Flags().StringVarP(&outputFormat, "output", "o", "table",
-		"Output format: table | json | yaml | csv")
-	rootCmd.Flags().BoolVar(&noColor, "no-color", false,
-		"Disable ANSI colours in table output (useful when piping to a file)")
-	rootCmd.Flags().BoolVar(&debug, "debug", false,
-		"Print the PromQL queries sent to Prometheus before executing them")
+	rootCmd.Flags().StringP("output", "o", "table", "Output format: table | json | yaml | csv")
+	rootCmd.Flags().Bool("no-color", false, "Disable ANSI colours in table output (useful when piping to a file)")
+	rootCmd.Flags().Bool("debug", false, "Print the PromQL queries sent to Prometheus before executing them")
+
+	// Bind all flags to viper so config file + env vars feed them automatically.
+	_ = viper.BindPFlag("nomad.address", rootCmd.PersistentFlags().Lookup("nomad-address"))
+	_ = viper.BindPFlag("nomad.token", rootCmd.PersistentFlags().Lookup("nomad-token"))
+	_ = viper.BindPFlag("nomad.tls.ca_cert", rootCmd.PersistentFlags().Lookup("nomad-ca-cert"))
+	_ = viper.BindPFlag("nomad.tls.client_cert", rootCmd.PersistentFlags().Lookup("nomad-client-cert"))
+	_ = viper.BindPFlag("nomad.tls.client_key", rootCmd.PersistentFlags().Lookup("nomad-client-key"))
+	_ = viper.BindPFlag("nomad.tls.insecure", rootCmd.PersistentFlags().Lookup("nomad-tls-insecure"))
+	_ = viper.BindPFlag("prometheus.address", rootCmd.PersistentFlags().Lookup("prometheus-address"))
+	_ = viper.BindPFlag("metrics_source", rootCmd.Flags().Lookup("metrics-source"))
+	_ = viper.BindPFlag("namespace", rootCmd.Flags().Lookup("namespace"))
+	_ = viper.BindPFlag("job", rootCmd.Flags().Lookup("job"))
+	_ = viper.BindPFlag("window", rootCmd.Flags().Lookup("window"))
+	_ = viper.BindPFlag("strategy.cpu_percentile", rootCmd.Flags().Lookup("cpu-percentile"))
+	_ = viper.BindPFlag("strategy.mem_percentile", rootCmd.Flags().Lookup("mem-percentile"))
+	_ = viper.BindPFlag("strategy.cpu_buffer", rootCmd.Flags().Lookup("cpu-buffer"))
+	_ = viper.BindPFlag("strategy.mem_buffer", rootCmd.Flags().Lookup("mem-buffer"))
+	_ = viper.BindPFlag("strategy.min_cpu", rootCmd.Flags().Lookup("min-cpu"))
+	_ = viper.BindPFlag("strategy.min_memory", rootCmd.Flags().Lookup("min-memory"))
+	_ = viper.BindPFlag("output.format", rootCmd.Flags().Lookup("output"))
+	_ = viper.BindPFlag("output.no_color", rootCmd.Flags().Lookup("no-color"))
+	_ = viper.BindPFlag("output.debug", rootCmd.Flags().Lookup("debug"))
+
+	// Bind standard Nomad env vars.
+	_ = viper.BindEnv("nomad.address", "NOMAD_ADDR")
+	_ = viper.BindEnv("nomad.token", "NOMAD_TOKEN")
+	_ = viper.BindEnv("nomad.tls.ca_cert", "NOMAD_CACERT")
+	_ = viper.BindEnv("nomad.tls.client_cert", "NOMAD_CLIENT_CERT")
+	_ = viper.BindEnv("nomad.tls.client_key", "NOMAD_CLIENT_KEY")
+}
+
+// initConfig loads the config file (if any). Called by cobra before RunE.
+func initConfig() {
+	if configFile != "" {
+		viper.SetConfigFile(configFile)
+	} else {
+		// 1. Project-level: .nrr/config.yaml in the current directory.
+		viper.AddConfigPath(".nrr")
+		// 2. User-level: $XDG_CONFIG_HOME/nrr/config.yaml (or ~/Library/Application Support/nrr on macOS).
+		if xdgConfig, err := os.UserConfigDir(); err == nil {
+			viper.AddConfigPath(filepath.Join(xdgConfig, "nrr"))
+		}
+		viper.SetConfigName("config")
+		viper.SetConfigType("yaml")
+	}
+
+	if err := viper.ReadInConfig(); err == nil {
+		fmt.Fprintf(os.Stderr, "Using config file: %s\n", viper.ConfigFileUsed())
+	}
 }
 
 func runRecommend(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	// Parse window duration
+	metricsSource := viper.GetString("metrics_source")
+	windowStr := viper.GetString("window")
+	namespace := viper.GetString("namespace")
+
 	window, err := parseDuration(windowStr)
 	if err != nil {
-		return fmt.Errorf("invalid --window %q: %w", windowStr, err)
+		return fmt.Errorf("invalid window %q: %w", windowStr, err)
 	}
 
-	// Validate flags
 	validSources := map[string]bool{"nomad-native": true, "cadvisor": true, "mock": true}
 	if !validSources[metricsSource] {
-		return fmt.Errorf("unknown --metrics-source %q: must be nomad-native, cadvisor, or mock", metricsSource)
+		return fmt.Errorf("unknown metrics-source %q: must be nomad-native, cadvisor, or mock", metricsSource)
 	}
 
-	// 1. Discover Nomad tasks and their current resource specs.
-	// In mock mode we skip the real Nomad API and use synthetic tasks instead.
+	// 1. Discover Nomad tasks.
 	var tasks []nomad.TaskSpec
 	if metricsSource == "mock" {
 		tasks = mockTasks()
 		fmt.Fprintf(os.Stderr, "Mock mode: using %d synthetic tasks (no Nomad API needed).\n", len(tasks))
 	} else {
-		nomadClient, err := nomad.NewClient(nomadAddress, nomadToken)
+		nomadClient, err := nomad.NewClient(
+			viper.GetString("nomad.address"),
+			viper.GetString("nomad.token"),
+			nomad.TLSConfig{
+				CACert:     viper.GetString("nomad.tls.ca_cert"),
+				ClientCert: viper.GetString("nomad.tls.client_cert"),
+				ClientKey:  viper.GetString("nomad.tls.client_key"),
+				Insecure:   viper.GetBool("nomad.tls.insecure"),
+			},
+		)
 		if err != nil {
-			return fmt.Errorf("connecting to Nomad at %s: %w", nomadAddress, err)
+			return fmt.Errorf("connecting to Nomad: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Discovering tasks in namespace %q...\n", namespace)
-		tasks, err = nomadClient.DiscoverTasks(ctx, namespace, jobFilter)
+		tasks, err = nomadClient.DiscoverTasks(ctx, namespace, viper.GetString("job"))
 		if err != nil {
 			return fmt.Errorf("discovering tasks: %w", err)
 		}
 	}
 	if len(tasks) == 0 {
-		fmt.Fprintln(os.Stderr, "No tasks found — check your --namespace and --job filters.")
+		fmt.Fprintln(os.Stderr, "No tasks found — check your namespace and job filters.")
 		return nil
 	}
 	fmt.Fprintf(os.Stderr, "Found %d task(s). Querying metrics (window: %s)...\n", len(tasks), windowStr)
 
-	// 2. Build the metrics backend
+	// 2. Build the metrics backend.
+	prometheusAddress := viper.GetString("prometheus.address")
+	debug := viper.GetBool("output.debug")
 	var backend recommender.MetricsBackend
 	switch metricsSource {
 	case "nomad-native":
@@ -161,17 +201,17 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 		backend = mock.New()
 	}
 
-	// 3. Recommendation config
+	// 3. Recommendation config.
 	cfg := recommender.Config{
-		CPUPercentile: cpuPercentile / 100.0,
-		MemPercentile: memPercentile / 100.0,
-		CPUBuffer:     cpuBuffer / 100.0,
-		MemBuffer:     memBuffer / 100.0,
-		MinCPUMHz:     minCPUMHz,
-		MinMemoryMB:   minMemoryMB,
+		CPUPercentile: viper.GetFloat64("strategy.cpu_percentile") / 100.0,
+		MemPercentile: viper.GetFloat64("strategy.mem_percentile") / 100.0,
+		CPUBuffer:     viper.GetFloat64("strategy.cpu_buffer") / 100.0,
+		MemBuffer:     viper.GetFloat64("strategy.mem_buffer") / 100.0,
+		MinCPUMHz:     viper.GetInt("strategy.min_cpu"),
+		MinMemoryMB:   viper.GetInt("strategy.min_memory"),
 	}
 
-	// 4. Generate recommendations
+	// 4. Generate recommendations.
 	var recommendations []recommender.Recommendation
 	for _, task := range tasks {
 		cpuSamples, err := backend.QueryCPU(ctx, task, window)
@@ -193,6 +233,11 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 		}
 
 		rec := recommender.Recommend(task, cpuSamples, memSamples, cfg)
+
+		if debug {
+			printDebugCalc(task, cpuSamples, memSamples, cfg, rec)
+		}
+
 		recommendations = append(recommendations, rec)
 	}
 
@@ -201,10 +246,10 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// 5. Format and print output
-	formatter, err := output.New(outputFormat, os.Stdout, noColor)
+	// 5. Format and print output.
+	formatter, err := output.New(viper.GetString("output.format"), os.Stdout, viper.GetBool("output.no_color"))
 	if err != nil {
-		return fmt.Errorf("output format %q: %w", outputFormat, err)
+		return fmt.Errorf("output format %q: %w", viper.GetString("output.format"), err)
 	}
 
 	return formatter.Format(recommendations)
@@ -214,8 +259,6 @@ func runRecommend(cmd *cobra.Command, args []string) error {
 // usage scenarios defined in the mock adapter (underutilised, well-sized,
 // spiky, hungry). These let you see all recommendation flavours in one run.
 func mockTasks() []nomad.TaskSpec {
-	// mockAllocIDs generates fake alloc UUIDs so the ALLOCS column renders
-	// a realistic count rather than "-" in mock mode.
 	fakeAllocs := func(n int, prefix string) []string {
 		ids := make([]string, n)
 		for i := range ids {
@@ -225,22 +268,66 @@ func mockTasks() []nomad.TaskSpec {
 	}
 
 	return []nomad.TaskSpec{
-		// Underutilised: declared resources much larger than actual usage
-		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "nginx", CPUMHz: 2000, MemoryMB: 1024, JobType: "service", AllocIDs: fakeAllocs(2, "api-gateway")},
-		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "envoy", CPUMHz: 1000, MemoryMB: 512, JobType: "service", AllocIDs: fakeAllocs(2, "api-gateway")},
-
-		// Well-sized: declared resources roughly match actual usage
-		{Namespace: "default", Job: "backend-api", Group: "app", Task: "server", CPUMHz: 500, MemoryMB: 256, JobType: "service", AllocIDs: fakeAllocs(1, "backend-api")},
-		{Namespace: "default", Job: "backend-api", Group: "app", Task: "metrics-exporter", CPUMHz: 100, MemoryMB: 64, JobType: "service", AllocIDs: fakeAllocs(1, "backend-api")},
-
-		// Spiky: low average but occasional bursts — tests P99 strategy
-		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "processor", CPUMHz: 4000, MemoryMB: 2048, JobType: "batch", AllocIDs: fakeAllocs(3, "batch-processor")},
-		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "scheduler", CPUMHz: 200, MemoryMB: 128, JobType: "batch", AllocIDs: fakeAllocs(3, "batch-processor")},
-
-		// Hungry: consistently using more than declared — recommendation will be higher
-		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "model-server", CPUMHz: 1000, MemoryMB: 2048, JobType: "service", AllocIDs: fakeAllocs(2, "ml-inference")},
-		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "feature-store", CPUMHz: 500, MemoryMB: 512, JobType: "service", AllocIDs: fakeAllocs(2, "ml-inference")},
+		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "nginx", CPUMHz: 2000, MemoryMB: 1024, JobType: "service", AllocIDs: fakeAllocs(2, "api-gateway"), Region: "global", Datacenters: []string{"dc1"}},
+		{Namespace: "default", Job: "api-gateway", Group: "web", Task: "envoy", CPUMHz: 1000, MemoryMB: 512, JobType: "service", AllocIDs: fakeAllocs(2, "api-gateway"), Region: "global", Datacenters: []string{"dc1"}},
+		{Namespace: "default", Job: "backend-api", Group: "app", Task: "server", CPUMHz: 500, MemoryMB: 256, JobType: "service", AllocIDs: fakeAllocs(1, "backend-api"), Region: "global", Datacenters: []string{"dc1"}},
+		{Namespace: "default", Job: "backend-api", Group: "app", Task: "metrics-exporter", CPUMHz: 100, MemoryMB: 64, JobType: "service", AllocIDs: fakeAllocs(1, "backend-api"), Region: "global", Datacenters: []string{"dc1"}},
+		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "processor", CPUMHz: 4000, MemoryMB: 2048, JobType: "batch", AllocIDs: fakeAllocs(3, "batch-processor"), Region: "global", Datacenters: []string{"dc1", "dc2"}},
+		{Namespace: "data", Job: "batch-processor", Group: "workers", Task: "scheduler", CPUMHz: 200, MemoryMB: 128, JobType: "batch", AllocIDs: fakeAllocs(3, "batch-processor"), Region: "global", Datacenters: []string{"dc1", "dc2"}},
+		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "model-server", CPUMHz: 1000, MemoryMB: 2048, JobType: "service", AllocIDs: fakeAllocs(2, "ml-inference"), Region: "global", Datacenters: []string{"dc1"}},
+		{Namespace: "data", Job: "ml-inference", Group: "serving", Task: "feature-store", CPUMHz: 500, MemoryMB: 512, JobType: "service", AllocIDs: fakeAllocs(2, "ml-inference"), Region: "global", Datacenters: []string{"dc1"}},
 	}
+}
+
+// printDebugCalc prints a human-readable breakdown of how the recommendation
+// was calculated for a single task — useful for app developers to understand
+// what metrics were observed and how the final values were derived.
+func printDebugCalc(task nomad.TaskSpec, cpuSamples, memSamples []float64, cfg recommender.Config, rec recommender.Recommendation) {
+	fmt.Fprintf(os.Stderr, "\n  [debug] %s / %s / %s\n", task.Job, task.Group, task.Task)
+
+	if len(cpuSamples) > 0 {
+		cpuMin, cpuMax := minMax(cpuSamples)
+		cpuP := recommender.Percentile(cpuSamples, cfg.CPUPercentile)
+		cpuBuffered := cpuP * (1 + cfg.CPUBuffer)
+		fmt.Fprintf(os.Stderr,
+			"    CPU  %d samples  min=%.0f max=%.0f  P%.0f=%.0f MHz  × %.2f buffer = %.0f  → %d MHz\n",
+			len(cpuSamples), cpuMin, cpuMax,
+			cfg.CPUPercentile*100, cpuP,
+			1+cfg.CPUBuffer, cpuBuffered,
+			rec.RecommendedCPUMHz,
+		)
+	} else {
+		fmt.Fprintf(os.Stderr, "    CPU  no samples — keeping current: %d MHz\n", task.CPUMHz)
+	}
+
+	if len(memSamples) > 0 {
+		memMin, memMax := minMax(memSamples)
+		memP := recommender.Percentile(memSamples, cfg.MemPercentile)
+		memBuffered := memP * (1 + cfg.MemBuffer)
+		fmt.Fprintf(os.Stderr,
+			"    MEM  %d samples  min=%.0f max=%.0f  P%.0f=%.0f MB  × %.2f buffer = %.0f  → %d MB\n",
+			len(memSamples), memMin, memMax,
+			cfg.MemPercentile*100, memP,
+			1+cfg.MemBuffer, memBuffered,
+			rec.RecommendedMemoryMB,
+		)
+	} else {
+		fmt.Fprintf(os.Stderr, "    MEM  no samples — keeping current: %d MB\n", task.MemoryMB)
+	}
+}
+
+// minMax returns the minimum and maximum values in a non-empty slice.
+func minMax(samples []float64) (min, max float64) {
+	min, max = samples[0], samples[0]
+	for _, v := range samples[1:] {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+	}
+	return
 }
 
 // parseDuration parses durations like "7d", "24h", "30m".

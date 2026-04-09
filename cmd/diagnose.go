@@ -13,6 +13,7 @@ import (
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var diagnoseCmd = &cobra.Command{
@@ -36,8 +37,9 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	addr := viper.GetString("prometheus.address")
 	client, err := promapi.NewClient(promapi.Config{
-		Address: prometheusAddress,
+		Address: addr,
 		Client:  &http.Client{Timeout: 15 * time.Second},
 	})
 	if err != nil {
@@ -45,7 +47,7 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 	}
 	api := promv1.NewAPI(client)
 
-	fmt.Fprintf(os.Stderr, "Probing %s …\n\n", prometheusAddress)
+	fmt.Fprintf(os.Stderr, "Probing %s …\n\n", addr)
 
 	checkNomadNative(ctx, api)
 	fmt.Println()
