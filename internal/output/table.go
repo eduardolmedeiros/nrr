@@ -66,6 +66,8 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 	type row struct {
 		num      string
 		ns       string
+		region   string
+		dc       string
 		job      string
 		jobType  string
 		group    string
@@ -94,9 +96,20 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 			jobType = "-"
 		}
 
+		dc := "-"
+		if len(r.Task.Datacenters) > 0 {
+			dc = strings.Join(r.Task.Datacenters, ",")
+		}
+		region := r.Task.Region
+		if region == "" {
+			region = "-"
+		}
+
 		rows = append(rows, row{
 			num:      fmt.Sprintf("%d", i+1),
 			ns:       r.Task.Namespace,
+			region:   region,
+			dc:       dc,
 			job:      r.Task.Job,
 			jobType:  jobType,
 			group:    r.Task.Group,
@@ -114,6 +127,8 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 	// ── compute column widths ─────────────────────────────────────────────────
 	cols := []col{
 		{"#", 1, true},
+		{"REGION", 6, false},
+		{"DC", 2, false},
 		{"NAMESPACE", 9, false},
 		{"JOB", 3, false},
 		{"TYPE", 4, false},
@@ -128,22 +143,24 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 
 	for _, r := range rows {
 		cols[0].width = maxInt(cols[0].width, vlen(r.num))
-		cols[1].width = maxInt(cols[1].width, vlen(r.ns))
-		cols[2].width = maxInt(cols[2].width, vlen(r.job))
-		cols[3].width = maxInt(cols[3].width, vlen(r.jobType))
-		cols[4].width = maxInt(cols[4].width, vlen(r.group))
-		cols[5].width = maxInt(cols[5].width, vlen(r.task))
-		cols[6].width = maxInt(cols[6].width, vlen(r.allocs))
-		cols[7].width = maxInt(cols[7].width, vlen(r.cpuNow))
-		cols[8].width = maxInt(cols[8].width, vlen(r.cpuRec))
-		cols[9].width = maxInt(cols[9].width, vlen(r.memNow))
-		cols[10].width = maxInt(cols[10].width, vlen(r.memRec))
+		cols[1].width = maxInt(cols[1].width, vlen(r.region))
+		cols[2].width = maxInt(cols[2].width, vlen(r.dc))
+		cols[3].width = maxInt(cols[3].width, vlen(r.ns))
+		cols[4].width = maxInt(cols[4].width, vlen(r.job))
+		cols[5].width = maxInt(cols[5].width, vlen(r.jobType))
+		cols[6].width = maxInt(cols[6].width, vlen(r.group))
+		cols[7].width = maxInt(cols[7].width, vlen(r.task))
+		cols[8].width = maxInt(cols[8].width, vlen(r.allocs))
+		cols[9].width = maxInt(cols[9].width, vlen(r.cpuNow))
+		cols[10].width = maxInt(cols[10].width, vlen(r.cpuRec))
+		cols[11].width = maxInt(cols[11].width, vlen(r.memNow))
+		cols[12].width = maxInt(cols[12].width, vlen(r.memRec))
 	}
 	// minimum widths for resource columns so short values don't look cramped
-	cols[7].width = maxInt(cols[7].width, 7)
-	cols[8].width = maxInt(cols[8].width, 12)
 	cols[9].width = maxInt(cols[9].width, 7)
 	cols[10].width = maxInt(cols[10].width, 12)
+	cols[11].width = maxInt(cols[11].width, 7)
+	cols[12].width = maxInt(cols[12].width, 12)
 
 	// ── border helpers ────────────────────────────────────────────────────────
 	hRule := func(left, mid, right string) string {
@@ -200,16 +217,18 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 	for _, r := range rows {
 		var sb strings.Builder
 		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.num, cols[0])); sb.WriteString(cc(ansiReset))
-		sb.WriteString(bV); sb.WriteString(padCell(r.ns, cols[1]))
-		sb.WriteString(bV); sb.WriteString(padCell(r.job, cols[2]))
-		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.jobType, cols[3])); sb.WriteString(cc(ansiReset))
-		sb.WriteString(bV); sb.WriteString(padCell(r.group, cols[4]))
-		sb.WriteString(bV); sb.WriteString(padCell(r.task, cols[5]))
-		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.allocs, cols[6])); sb.WriteString(cc(ansiReset))
+		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.region, cols[1])); sb.WriteString(cc(ansiReset))
+		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.dc, cols[2])); sb.WriteString(cc(ansiReset))
+		sb.WriteString(bV); sb.WriteString(padCell(r.ns, cols[3]))
+		sb.WriteString(bV); sb.WriteString(padCell(r.job, cols[4]))
+		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.jobType, cols[5])); sb.WriteString(cc(ansiReset))
+		sb.WriteString(bV); sb.WriteString(padCell(r.group, cols[6]))
+		sb.WriteString(bV); sb.WriteString(padCell(r.task, cols[7]))
+		sb.WriteString(bV); sb.WriteString(cc(ansiDim)); sb.WriteString(padCell(r.allocs, cols[8])); sb.WriteString(cc(ansiReset))
 
 		// CPU NOW — plain, right-aligned
 		sb.WriteString(bV)
-		sb.WriteString(padCell(r.cpuNow, cols[7]))
+		sb.WriteString(padCell(r.cpuNow, cols[9]))
 
 		// CPU REC — coloured
 		sb.WriteString(bV)
@@ -217,11 +236,11 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 		sb.WriteString(cc(r.cpuColor))
 		sb.WriteString(r.cpuRec)
 		sb.WriteString(cc(ansiReset))
-		sb.WriteString(strings.Repeat(" ", cols[8].width-vlen(r.cpuRec)+1))
+		sb.WriteString(strings.Repeat(" ", cols[10].width-vlen(r.cpuRec)+1))
 
 		// MEM NOW — plain, right-aligned
 		sb.WriteString(bV)
-		sb.WriteString(padCell(r.memNow, cols[9]))
+		sb.WriteString(padCell(r.memNow, cols[11]))
 
 		// MEM REC — coloured
 		sb.WriteString(bV)
@@ -229,7 +248,7 @@ func (f *TableFormatter) Format(recs []recommender.Recommendation) error {
 		sb.WriteString(cc(r.memColor))
 		sb.WriteString(r.memRec)
 		sb.WriteString(cc(ansiReset))
-		sb.WriteString(strings.Repeat(" ", cols[10].width-vlen(r.memRec)+1))
+		sb.WriteString(strings.Repeat(" ", cols[12].width-vlen(r.memRec)+1))
 
 		sb.WriteString(bV)
 		fmt.Fprintln(w, sb.String())
